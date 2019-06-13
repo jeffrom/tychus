@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"time"
 )
 
@@ -29,8 +30,9 @@ func newProxy(c *Configuration) *proxy {
 	}
 
 	revproxy := httputil.NewSingleHostReverseProxy(url)
-	// comment this out to get error logs
-	revproxy.ErrorLog = log.New(ioutil.Discard, "", 0)
+	if dbg := os.Getenv("DEBUG"); dbg == "" {
+		revproxy.ErrorLog = log.New(ioutil.Discard, "proxy", 0)
+	}
 
 	p := &proxy{
 		config:   c,
