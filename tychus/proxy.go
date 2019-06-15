@@ -1,13 +1,16 @@
 package tychus
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"time"
 )
 
@@ -27,7 +30,9 @@ func newProxy(c *Configuration) *proxy {
 	}
 
 	revproxy := httputil.NewSingleHostReverseProxy(url)
-	revproxy.ErrorLog = log.New(ioutil.Discard, "", 0)
+	if dbg := os.Getenv("DEBUG"); dbg == "" {
+		revproxy.ErrorLog = log.New(ioutil.Discard, "proxy", 0)
+	}
 
 	p := &proxy{
 		config:   c,
@@ -100,8 +105,15 @@ func (p *proxy) forward(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	}
 
+	body := &reqBody{r: r.Body, size: int(r.ContentLength)}
+	r.Body = body
+
 	writer := &proxyWriter{res: w}
 	p.revproxy.ServeHTTP(writer, r)
+
+	if writer.status < 200 || writer.status >= 300 && r.Body != nil {
+		r.Body = body.NextReader()
+	}
 
 	// If the request is "successful" - as in the server responded in
 	// some way, return the response to the client.
@@ -142,3 +154,31 @@ func (w *proxyWriter) Write(body []byte) (int, error) {
 func (w *proxyWriter) Header() http.Header {
 	return w.res.Header()
 }
+
+type reqBody struct {
+	r    io.ReadCloser
+	b    []byte
+	size int
+}
+
+func (b *reqBody) Read(p []byte) (int, error) {
+	if b.b == nil {
+		b.b = make([]byte, b.size)
+	}
+	n, err := b.r.Read(p)
+	// fmt.Printf("reqBody: %q %+v\n", p[:b.size], err)
+	copy(b.b, p)
+	return n, err
+}
+
+func (b *reqBody) Close() error { return nil }
+
+func (b *reqBody) NextReader() io.ReadCloser {
+	return &closingBuffer{Buffer: bytes.NewBuffer(b.b)}
+}
+
+type closingBuffer struct {
+	*bytes.Buffer
+}
+
+func (b *closingBuffer) Close() error { return nil }
